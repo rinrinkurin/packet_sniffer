@@ -1,9 +1,14 @@
 import os
 import sys
 import getpass
-from scapy.all import sniff, IP, TCP, Raw
 import logging
 import subprocess
+import re
+import ctypes
+import traceback
+from scapy.all import sniff, IP, TCP, Raw
+
+BLACKLIST = set()
 
 # ロギング設定
 logging.basicConfig(filename='threat_log.log', level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -11,6 +16,15 @@ logging.basicConfig(filename='threat_log.log', level=logging.INFO, format='%(asc
 def check_platform():
     """現在のOSを判定"""
     return os.name
+
+def is_admin_windows():
+    """Windowsの管理者権限チェック"""
+    if os.name != 'nt':
+        return True
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
 
 def get_user_auth():
     """認証処理（管理者のみ）"""
@@ -32,6 +46,7 @@ def save_blacklist(ip):
     """ブラックリストにIPを追加"""
     with open("blacklist.txt", 'a') as f:
         f.write(f"{ip}\n")
+    BLACKLIST.add(ip)
 
 def block_ip_linux(ip):
     """Linux/macOS向けブロック（iptables）"""
@@ -58,13 +73,15 @@ def detect_threats(packet):
         dst_port = packet[TCP].dport
 
         # ブラックリストチェック
-        if src_ip in load_blacklist():
+        if src_ip in BLACKLIST:
             print(f"⚠️ {src_ip} は既にブラックリストに登録されています。")
             return
 
         # HTTP（ポート80） or FTP（ポート21）の検出
         if dst_port == 80 or dst_port == 21:
             try:
+                if not packet.haslayer(Raw):
+                    return
                 payload = str(packet[Raw].load).lower()
                 if "http" in payload or "ftp" in payload:
                     print(f"[警告] {src_ip} から非暗号化通信（HTTP/FTP）が検出されました！")
@@ -89,7 +106,7 @@ def detect_threats(packet):
                         # ブロック処理
                         if check_platform() == 'posix':
                             block_ip_linux(src_ip)
-                        elif check,platform() == 'nt':
+                        elif check_platform() == 'nt':
                             block_ip_windows(src_ip)
 
             except Exception as e:
@@ -98,8 +115,22 @@ def detect_threats(packet):
 def main():
     get_user_auth()
     print("=== セキュリティスニッファーが起動しました ===")
-    sniff(prn=detect_threats, store=False)
+    if os.name == 'nt' and not is_admin_windows():
+        print("⚠️ 管理者権限で実行してください。")
+        return
+    try:
+        print("監視中...（終了するには Ctrl+C）")
+        sniff(prn=detect_threats, store=False)
+    except Exception as e:
+        print("❌ 実行中にエラーが発生しました。")
+        print(f"エラー内容: {e}")
+        logging.exception("実行中に例外が発生しました")
+        print("ヒント: WindowsではNpcapが必要です（WinPcap互換モード推奨）。")
+        try:
+            input("Enterで終了します...")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
-    import re
+    BLACKLIST = load_blacklist()
     main()
