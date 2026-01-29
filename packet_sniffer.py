@@ -6,7 +6,7 @@ import subprocess
 import re
 import ctypes
 import traceback
-from scapy.all import sniff, IP, TCP, Raw
+from scapy.all import sniff, IP, TCP, Raw, conf
 
 BLACKLIST = set()
 
@@ -112,6 +112,17 @@ def detect_threats(packet):
             except Exception as e:
                 logging.error(f"検出失敗: {e}")
 
+def start_sniffing():
+    """環境に応じてスニッフィングを開始"""
+    sniff_kwargs = dict(prn=detect_threats, store=False)
+
+    # Windowsでpcapが利用できない場合はL3ソケットにフォールバック
+    if os.name == 'nt' and not getattr(conf, "use_pcap", False):
+        print("⚠️ Npcap/WinPcapが見つかりません。L3モードで監視します（制限あり）。")
+        sniff_kwargs["L2socket"] = conf.L3socket
+
+    sniff(**sniff_kwargs)
+
 def main():
     get_user_auth()
     print("=== セキュリティスニッファーが起動しました ===")
@@ -120,7 +131,7 @@ def main():
         return
     try:
         print("監視中...（終了するには Ctrl+C）")
-        sniff(prn=detect_threats, store=False)
+        start_sniffing()
     except Exception as e:
         print("❌ 実行中にエラーが発生しました。")
         print(f"エラー内容: {e}")
